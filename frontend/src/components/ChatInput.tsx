@@ -39,9 +39,10 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   return (
     <div className={cn(
-      "flex items-end gap-2.5 rounded-2xl border bg-white/80 backdrop-blur-xl px-4 py-3 transition-all duration-300",
-      "border-peach-200/40 shadow-lg shadow-peach-200/20",
-      "focus-within:border-peach-300/60 focus-within:shadow-xl focus-within:shadow-peach-200/30 focus-within:ring-2 focus-within:ring-peach-100/50"
+      "flex items-end gap-2.5 rounded-2xl border-2 bg-white/90 backdrop-blur-xl px-4 py-3 transition-all duration-300",
+      "border-peach-200/50 shadow-md shadow-peach-200/15",
+      "hover:border-peach-300/70 hover:shadow-lg hover:shadow-peach-200/25",
+      "focus-within:border-peach-400/80 focus-within:shadow-xl focus-within:shadow-peach-300/30 focus-within:ring-2 focus-within:ring-peach-200/50"
     )}>
       <textarea
         ref={textareaRef}

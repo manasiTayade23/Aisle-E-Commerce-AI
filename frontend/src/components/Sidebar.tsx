@@ -1,6 +1,7 @@
 "use client";
 
-import { ShoppingBag, Plus, MessageSquare, X, ShoppingCart, User, ChevronLeft } from "lucide-react";
+import Link from "next/link";
+import { Store, Plus, MessageSquare, X, ShoppingCart, User } from "lucide-react";
 import { Conversation } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
@@ -13,6 +14,7 @@ interface SidebarProps {
   onSelectConversation: (id: string) => void;
   cartItemCount: number;
   onOpenCart: () => void;
+  userName?: string | null;
 }
 
 export function Sidebar({
@@ -24,6 +26,7 @@ export function Sidebar({
   onSelectConversation,
   cartItemCount,
   onOpenCart,
+  userName = null,
 }: SidebarProps) {
   return (
     <>
@@ -48,12 +51,12 @@ export function Sidebar({
         {/* Brand header */}
         <div className="flex items-center justify-between px-5 py-5 border-b border-peach-100/50">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-peach-400 via-rose-400 to-peach-500 shadow-lg shadow-peach-300/30">
-              <ShoppingBag className="h-5 w-5 text-white" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-800 text-white shadow-lg">
+              <Store className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gradient tracking-tight">ShopAI</h1>
-              <p className="text-[10px] font-semibold text-peach-600/70 tracking-widest uppercase">Assistant</p>
+              <h1 className="text-lg font-bold text-gray-900 tracking-tight">Aisle</h1>
+              <p className="text-[10px] font-semibold text-gray-500">Your shopping sidekick</p>
             </div>
           </div>
           <button
@@ -138,14 +141,20 @@ export function Sidebar({
             <span className="text-[13px] font-medium text-gray-600 group-hover:text-gray-800">Shopping Cart</span>
           </button>
 
-          {/* User profile placeholder */}
+          {/* User */}
           <div className="flex items-center gap-3 rounded-xl px-3 py-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-peach-100 to-rose-100">
-              <User className="h-4 w-4 text-peach-500" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-600">
+              <User className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <p className="text-[13px] font-medium text-gray-700 truncate">Guest User</p>
-              <p className="text-[10px] text-gray-400">Free Plan</p>
+              <p className="text-[13px] font-semibold text-gray-800 truncate">
+                {userName || "Guest"}
+              </p>
+              {!userName && (
+                <Link href="/signin" className="text-[11px] font-medium text-peach-600 hover:underline">
+                  Sign in
+                </Link>
+              )}
             </div>
           </div>
         </div>

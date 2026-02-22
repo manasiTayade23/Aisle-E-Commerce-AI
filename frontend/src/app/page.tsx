@@ -1,20 +1,33 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { Message, ToolCallData, ToolResultData, Conversation, Product, CartItem } from "@/lib/types";
-import { sendMessage, fetchCart } from "@/lib/api";
+import { sendMessage, fetchCart, addToCartDirect, updateCartQuantityDirect, removeFromCartDirect } from "@/lib/api";
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ChatInput";
 import { Sidebar } from "@/components/Sidebar";
 import { CartDrawer } from "@/components/CartDrawer";
 import { ProductDetailDrawer } from "@/components/ProductDetailDrawer";
+import Link from "next/link";
+import { signOut } from "next-auth/react";
 import {
-  ShoppingBag, Menu, ShoppingCart, RotateCcw,
+  Store, Menu, ShoppingCart, RotateCcw,
 } from "lucide-react";
 
-const CATEGORIES = ["all", "electronics", "jewelery", "men's clothing", "women's clothing"];
-
 export default function Home() {
+  const router = useRouter();
+  const { data: authSession, status } = useSession();
+  const accessToken = (authSession as { accessToken?: string } | null)?.accessToken ?? null;
+
+  // Redirect to login when user lands and is not authenticated
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.replace("/signin");
+    }
+  }, [status, router]);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -22,24 +35,23 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // UI state
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [cartOpen, setCartOpen] = useState(false);
   const [productDetailOpen, setProductDetailOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeCategory, setActiveCategory] = useState("all");
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
 
-  // Fetch cart from backend for current session (single source of truth)
+  // Fetch cart from backend (session or authenticated user)
   const refetchCart = useCallback(async () => {
-    const res = await fetchCart(sessionId);
+    const res = await fetchCart(sessionId || "", accessToken);
     setCartItems(res.items);
-  }, [sessionId]);
+  }, [sessionId, accessToken]);
 
   useEffect(() => {
-    if (sessionId) refetchCart();
+    if (sessionId || accessToken) refetchCart();
     else setCartItems([]);
-  }, [sessionId, refetchCart]);
+  }, [sessionId, accessToken, refetchCart]);
 
   const cartItemCount = cartItems.reduce((s, i) => s + i.quantity, 0);
 
@@ -136,7 +148,7 @@ export default function Home() {
               )
             );
           }
-        });
+        }, accessToken);
 
         if (newSessionId && newSessionId !== sessionId) {
           setSessionId(newSessionId);
@@ -154,9 +166,9 @@ export default function Home() {
             ];
           });
         }
-        // Refresh cart so sidebar/drawer reflect any add/remove/update from this turn
+        // Refresh cart so sidebar/drawer reflect any add/remove/update from this turn (same cart as UI)
         if (newSessionId) {
-          const res = await fetchCart(newSessionId);
+          const res = await fetchCart(newSessionId, accessToken);
           setCartItems(res.items);
         }
       } catch (err) {
@@ -170,48 +182,97 @@ export default function Home() {
         setIsLoading(false);
       }
     },
-    [sessionId]
+    [sessionId, accessToken]
   );
 
   const handleClear = () => {
     setMessages([]);
     setSessionId(null);
     setError(null);
-    setActiveCategory("all");
   };
 
-  const handleCategoryFilter = (category: string) => {
-    setActiveCategory(category);
-    if (category === "all") return;
-    handleSend(`Show me ${category}`);
-  };
+  // Ensure we have a session id for cart (create one if user adds to cart before first message)
+  const getOrCreateSessionId = useCallback((): string => {
+    if (sessionId) return sessionId;
+    const newId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setSessionId(newId);
+    return newId;
+  }, [sessionId]);
 
-  const handleAddToCart = (productId: number) => {
-    handleSend(`Add product ${productId} to my cart`);
-  };
+  const handleAddToCart = useCallback(async (productId: number) => {
+    setError(null);
+    const sid = getOrCreateSessionId();
+    try {
+      const res = await addToCartDirect(sid, productId, 1, accessToken);
+      setCartItems(res.items);
+      setCartOpen(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add to cart");
+    }
+  }, [getOrCreateSessionId, accessToken]);
 
   const handleViewProduct = (product: Product) => {
     setSelectedProduct(product);
     setProductDetailOpen(true);
   };
 
-  const handleAddFromDrawer = (productId: number, quantity: number) => {
-    handleSend(`Add ${quantity} of product ${productId} to my cart`);
-  };
-
-  const handleUpdateCartQuantity = (productId: number, quantity: number) => {
-    if (quantity === 0) {
-      handleSend(`Remove product ${productId} from my cart`);
-    } else {
-      handleSend(`Update product ${productId} quantity to ${quantity} in my cart`);
+  const handleAddFromDrawer = useCallback(async (productId: number, quantity: number) => {
+    setError(null);
+    const sid = getOrCreateSessionId();
+    try {
+      const res = await addToCartDirect(sid, productId, quantity, accessToken);
+      setCartItems(res.items);
+      setProductDetailOpen(false);
+      setCartOpen(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add to cart");
     }
-  };
+  }, [getOrCreateSessionId, accessToken]);
 
-  const handleRemoveFromCart = (productId: number) => {
-    handleSend(`Remove product ${productId} from my cart`);
-  };
+  const handleUpdateCartQuantity = useCallback(async (productId: number, quantity: number) => {
+    const sid = sessionId || getOrCreateSessionId();
+    setError(null);
+    try {
+      if (quantity === 0) {
+        const res = await removeFromCartDirect(sid, productId, accessToken);
+        setCartItems(res.items);
+      } else {
+        const res = await updateCartQuantityDirect(sid, productId, quantity, accessToken);
+        setCartItems(res.items);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update cart");
+    }
+  }, [sessionId, getOrCreateSessionId, accessToken]);
+
+  const handleRemoveFromCart = useCallback(async (productId: number) => {
+    const sid = sessionId || getOrCreateSessionId();
+    setError(null);
+    try {
+      const res = await removeFromCartDirect(sid, productId, accessToken);
+      setCartItems(res.items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to remove from cart");
+    }
+  }, [sessionId, getOrCreateSessionId, accessToken]);
 
   const isEmpty = messages.length === 0;
+
+  // Show nothing (or loader) while checking auth / redirecting
+  if (status === "loading" || status === "unauthenticated") {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-slate-800 flex items-center justify-center">
+            <Store className="h-5 w-5 text-white" />
+          </div>
+          <p className="text-sm font-medium text-gray-500">
+            {status === "loading" ? "Loading…" : "Redirecting to sign in…"}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -230,9 +291,10 @@ export default function Home() {
         onSelectConversation={() => {}}
         cartItemCount={cartItemCount}
         onOpenCart={() => {
-          if (sessionId) refetchCart();
+          if (sessionId || accessToken) refetchCart();
           setCartOpen(true);
         }}
+        userName={authSession?.user?.name ?? authSession?.user?.email ?? null}
       />
 
       {/* Main content */}
@@ -248,48 +310,48 @@ export default function Home() {
             </button>
 
             <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-peach-400 via-rose-400 to-peach-500 shadow-md shadow-peach-300/25">
-                <ShoppingBag className="h-4 w-4 text-white" />
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-white shadow-md">
+                <Store className="h-4 w-4" />
               </div>
               <div className="hidden sm:block">
-                <h1 className="text-[15px] font-bold text-gradient tracking-tight">ShopAI</h1>
-                <p className="text-[10px] font-semibold text-gray-500 tracking-widest uppercase -mt-0.5">Assistant</p>
+                <h1 className="text-[15px] font-extrabold text-gray-900 tracking-tight">Aisle</h1>
+                <p className="text-[10px] font-bold text-gray-500 -mt-0.5">Your shopping sidekick</p>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Category filters - desktop */}
-            <div className="hidden md:flex items-center gap-1 bg-white/50 rounded-xl p-1 border border-peach-100/30">
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => handleCategoryFilter(cat)}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold capitalize transition-all duration-200 ${
-                    activeCategory === cat
-                      ? "bg-gradient-to-r from-peach-400 to-rose-400 text-white shadow-sm shadow-peach-200/40"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-peach-50/50"
-                  }`}
-                >
-                  {cat === "all" ? "All" : cat}
-                </button>
-              ))}
-            </div>
-
             {messages.length > 0 && (
               <button
                 onClick={handleClear}
-                className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-gray-500 hover:bg-peach-50/80 hover:text-gray-700 transition-all active:scale-95"
+                className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-bold text-gray-600 hover:bg-peach-50/80 hover:text-gray-800 transition-all active:scale-95"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Clear</span>
               </button>
             )}
 
+            {/* Auth: sign in / user */}
+            {authSession?.user ? (
+              <button
+                onClick={() => signOut()}
+                className="hidden sm:flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold text-gray-700 hover:bg-peach-50/80"
+              >
+                {authSession.user.email}
+              </button>
+            ) : (
+              <Link
+                href="/signin"
+                className="hidden sm:flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold text-peach-600 hover:bg-peach-50/80"
+              >
+                Sign in
+              </Link>
+            )}
+
             {/* Cart button */}
             <button
               onClick={() => {
-                if (sessionId) refetchCart();
+                if (sessionId || accessToken) refetchCart();
                 setCartOpen(true);
               }}
               className="relative flex h-9 w-9 items-center justify-center rounded-xl hover:bg-peach-50/80 transition-colors"
@@ -304,40 +366,44 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Category filters - mobile */}
-        <div className="md:hidden flex items-center gap-1.5 px-4 py-2 overflow-x-auto glass border-b border-peach-100/20">
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => handleCategoryFilter(cat)}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-[11px] font-semibold capitalize transition-all duration-200 ${
-                activeCategory === cat
-                  ? "bg-gradient-to-r from-peach-400 to-rose-400 text-white shadow-sm"
-                  : "bg-white/50 text-gray-500 border border-peach-100/30"
-              }`}
-            >
-              {cat === "all" ? "All" : cat}
-            </button>
-          ))}
-        </div>
-
         {/* Messages / Empty state */}
         <div className="flex-1 overflow-y-auto">
           {isEmpty ? (
             <div className="flex h-full flex-col items-center justify-center px-4">
               {/* Animated hero */}
               <div className="relative mb-6">
-                <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-peach-400/20 to-rose-300/20 blur-2xl animate-glow" />
-                <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-peach-400 via-rose-400 to-peach-500 shadow-xl shadow-peach-400/25 animate-float">
-                  <ShoppingBag className="h-8 w-8 text-white" />
+                <div className="absolute inset-0 rounded-3xl bg-slate-200/30 blur-2xl animate-glow" />
+                <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-800 text-white shadow-xl animate-float">
+                  <Store className="h-8 w-8" />
                 </div>
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 tracking-tight mb-1">
+              <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight mb-1">
                 What are you looking for?
               </h2>
-              <p className="text-sm text-gray-500 mb-8 text-center max-w-sm leading-relaxed">
+              <p className="text-sm font-medium text-gray-600 mb-6 text-center max-w-sm leading-relaxed">
                 Search products, compare prices, or manage your cart.
               </p>
+
+              {/* Suggested prompts / quick actions */}
+              <div className="flex flex-wrap justify-center gap-2 mb-6">
+                {[
+                  "Show electronics",
+                  "Show me TVs",
+                  "Women's clothing under $50",
+                  "View my cart",
+                  "Compare the first two",
+                ].map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => handleSend(prompt)}
+                    disabled={isLoading}
+                    className="rounded-xl px-4 py-2.5 text-[13px] font-semibold text-gray-700 bg-white/90 border-2 border-peach-200/50 hover:border-peach-300 hover:bg-peach-50/50 hover:text-gray-900 transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
 
               {/* Centered chat input */}
               <div className="w-full max-w-xl">
@@ -345,7 +411,7 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <div className="mx-auto max-w-2xl space-y-5 px-4 py-5">
+            <div className="mx-auto w-full max-w-4xl xl:max-w-5xl space-y-6 px-4 sm:px-6 lg:px-8 py-6">
               {messages.map((msg) => (
                 <ChatMessage
                   key={msg.id}
@@ -355,7 +421,7 @@ export default function Home() {
                 />
               ))}
               {error && (
-                <div className="flex items-start gap-3 rounded-2xl border border-red-200/40 bg-red-50/80 backdrop-blur-sm px-4 py-3.5 text-[13px] text-red-700 animate-fade-in leading-relaxed">
+                <div className="flex items-start gap-3 rounded-2xl border border-red-200/40 bg-red-50/80 backdrop-blur-sm px-4 py-3.5 text-[13px] font-semibold text-red-700 animate-fade-in leading-relaxed">
                   <span className="flex-shrink-0 mt-0.5 font-bold text-red-400">!</span>
                   <span>{error}</span>
                 </div>
@@ -367,8 +433,22 @@ export default function Home() {
 
         {/* Bottom input - only when conversation is active */}
         {!isEmpty && (
-          <div className="glass-strong border-t border-peach-100/30 px-4 py-3.5 sticky bottom-0">
-            <div className="mx-auto max-w-2xl">
+          <div className="glass-strong border-t border-peach-100/30 px-4 sm:px-6 lg:px-8 py-3.5 sticky bottom-0">
+            <div className="mx-auto w-full max-w-4xl xl:max-w-5xl space-y-3">
+              {/* Quick action buttons when chat is active */}
+              <div className="flex flex-wrap gap-2 justify-center">
+                {["Show electronics", "Show me TVs", "View my cart"].map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => handleSend(prompt)}
+                    disabled={isLoading}
+                    className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-gray-600 bg-white/80 border border-peach-200/40 hover:bg-peach-50/80 hover:border-peach-300/60 transition-all"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
               <ChatInput onSend={handleSend} disabled={isLoading} />
             </div>
           </div>

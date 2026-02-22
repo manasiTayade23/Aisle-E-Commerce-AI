@@ -58,9 +58,11 @@ def _get_graph() -> ShoppingGraph:
     return _graph_instance
 
 
-async def stream_response(session_id: str, user_message: str) -> AsyncGenerator[str, None]:
-    """Stream the agent's response using LangGraph multi-agent system."""
-    logger.info("[agent] stream_response called session_id=%s user_message=%r", session_id, user_message[:60] if len(user_message) > 60 else user_message)
+async def stream_response(
+    session_id: str, user_message: str, user_id: int | None = None
+) -> AsyncGenerator[str, None]:
+    """Stream the agent's response. user_id is passed so cart tools use the same cart as the UI when authenticated."""
+    logger.info("[agent] stream_response called session_id=%s user_id=%s user_message=%r", session_id, user_id, user_message[:60] if len(user_message) > 60 else user_message)
     messages = await store_get_messages(session_id)
     logger.info("[agent] conversation history length=%d", len(messages))
 
@@ -80,7 +82,7 @@ async def stream_response(session_id: str, user_message: str) -> AsyncGenerator[
     # Stream response and accumulate for conversation history
     response_text = ""
     product_ids_from_search = []
-    async for chunk in graph.stream_response(session_id, user_message, conversation_history):
+    async for chunk in graph.stream_response(session_id, user_message, conversation_history, user_id=user_id):
         yield chunk
         # Parse chunk to persist context for follow-up (e.g. "compare the first two")
         try:

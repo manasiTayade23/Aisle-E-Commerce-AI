@@ -13,7 +13,7 @@ FAKE_STORE_BASE_URL = os.getenv("FAKE_STORE_BASE_URL", "https://fakestoreapi.com
 FAKE_STORE_TIMEOUT = float(os.getenv("FAKE_STORE_TIMEOUT", "15.0"))
 
 # LLM Configuration
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -44,6 +44,9 @@ CONVERSATION_TTL_SECONDS = int(os.getenv("CONVERSATION_TTL_SECONDS", "86400"))  
 # Authentication
 NEXTAUTH_SECRET = os.getenv("NEXTAUTH_SECRET", "")
 NEXTAUTH_URL = os.getenv("NEXTAUTH_URL", "http://localhost:3000")
+JWT_SECRET = os.getenv("JWT_SECRET", os.getenv("NEXTAUTH_SECRET", "change-me-in-production"))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = 24 * 7  # 7 days
 
 
 def get_llm_config(provider: str = None) -> dict:

@@ -1,48 +1,27 @@
-version: "3.9"
-
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      - BACKEND_HOST=0.0.0.0
-      - BACKEND_PORT=8000
+      - DATABASE_URL=sqlite:////app/data/shopping_assistant.db
     volumes:
-      - ./backend/chroma_db:/app/chroma_db
-      - ./backend/shopping_assistant.db:/app/shopping_assistant.db
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
+      - backend_data:/app/data
   frontend:
     build:
       context: ./frontend
-      args:
-        - NEXT_PUBLIC_API_URL=http://localhost:8000
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    env_file: .env
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXTAUTH_URL=http://localhost:3000
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
 
-  # Optional: PostgreSQL database (uncomment if using PostgreSQL)
-  # postgres:
-  #   image: postgres:15-alpine
-  #   environment:
-  #     POSTGRES_DB: shopping_assistant
-  #     POSTGRES_USER: postgres
-  #     POSTGRES_PASSWORD: postgres
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   ports:
-  #     - "5432:5432"
-
-# volumes:
-#   postgres_data:
+volumes:
+  backend_data:

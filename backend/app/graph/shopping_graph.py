@@ -1,7 +1,9 @@
 """LangGraph-based multi-agent shopping assistant workflow."""
 
+import asyncio
 import logging
-from typing import Dict, Any, Annotated
+import re
+from typing import Dict, Any, Annotated, List
 try:
     from typing import TypedDict
 except ImportError:
@@ -19,8 +21,51 @@ from app.rag.retriever import RAGRetriever
 
 logger = logging.getLogger(__name__)
 
+# Pattern used in agent.py: "[Products listed above, in order: ID 1, ID 2, ...]"
+PRODUCT_IDS_PATTERN = re.compile(
+    r"\[Products listed above, in order:\s*([^\]]+)\]",
+    re.IGNORECASE | re.DOTALL,
+)
+# Fallback: any "ID N" or "ID N, ID M" sequence in assistant content
+ID_LIST_PATTERN = re.compile(r"ID\s*(\d+)", re.IGNORECASE)
 
-class GraphState(TypedDict):
+
+def _parse_ids_from_text(text: str) -> List[int]:
+    """Parse ordered product IDs from a string (e.g. 'ID 1, ID 2' or bracket section)."""
+    ids = []
+    for part in re.split(r"[,;]", text):
+        part = part.strip()
+        id_m = re.search(r"ID\s*(\d+)|(?:^|\s)(\d+)(?:\s|$)", part)
+        if id_m:
+            ids.append(int(id_m.group(1) or id_m.group(2)))
+    return ids
+
+
+def _extract_recent_product_ids(messages: list) -> List[int]:
+    """Extract product IDs from the most recent assistant message that lists products."""
+    if not messages:
+        return []
+    for msg in reversed(messages):
+        role = msg.role if hasattr(msg, "role") else msg.get("role")
+        if role != "assistant":
+            continue
+        content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        # Primary: bracket format from agent.py
+        m = PRODUCT_IDS_PATTERN.search(content)
+        if m:
+            ids = _parse_ids_from_text(m.group(1))
+            if ids:
+                return ids
+        # Fallback: any "ID N" sequence in this assistant message (preserve order)
+        all_ids = ID_LIST_PATTERN.findall(content)
+        if all_ids:
+            return [int(i) for i in all_ids]
+    return []
+
+
+class GraphState(TypedDict, total=False):
     """State for the shopping graph."""
     user_message: str
     session_id: str
@@ -30,6 +75,8 @@ class GraphState(TypedDict):
     agent: str
     next_agent: str
     rag_context: list
+    recent_product_ids: list
+    user_id: int
 
 
 class ShoppingGraph:
@@ -120,24 +167,30 @@ class ShoppingGraph:
         self,
         session_id: str,
         user_message: str,
-        conversation_history: list = None
+        conversation_history: list = None,
+        user_id: int | None = None,
     ):
-        """Stream response from the graph."""
+        """Stream response from the graph. user_id is set when user is authenticated so cart uses DB."""
         import json
         from app.tools import execute_tool
 
-        logger.info("[graph] stream_response: initializing state")
+        logger.info("[graph] stream_response: initializing state user_id=%s", user_id)
+        conversation_history = conversation_history or []
+        recent_product_ids = _extract_recent_product_ids(conversation_history)
         # Initialize state
         state: GraphState = {
             "user_message": user_message,
             "session_id": session_id,
-            "messages": conversation_history or [],
+            "messages": conversation_history,
             "response": "",
             "tool_calls": [],
             "agent": "",
             "next_agent": "",
             "rag_context": [],
+            "recent_product_ids": recent_product_ids,
         }
+        if user_id is not None:
+            state["user_id"] = user_id
 
         logger.info("[graph] stream_response: calling graph.ainvoke")
         # Run graph
@@ -167,9 +220,10 @@ class ShoppingGraph:
                 "input": tool_input,
             }) + "\n"
 
-            # Execute tool
+            # Execute tool (pass user_id so cart uses same DB cart as UI for logged-in users)
             try:
-                result = await execute_tool(tool_name, tool_input, session_id)
+                uid = state.get("user_id")
+                result = await execute_tool(tool_name, tool_input, session_id, user_id=uid)
                 result_data = json.loads(result)
 
                 yield json.dumps({
@@ -185,15 +239,18 @@ class ShoppingGraph:
                     "content": f"Tool execution error: {str(e)}"
                 }) + "\n"
 
-        # Stream response text
+        # Stream response text word-by-word (and small punctuation runs) for GPT-like streaming
         if response:
-            chunk_size = 50
+            # Split into words and single spaces; preserve newlines as tokens so markdown renders
+            tokens = re.split(r"(\s+)", response)
             num_chunks = 0
-            for i in range(0, len(response), chunk_size):
-                chunk = response[i:i + chunk_size]
+            for token in tokens:
+                if not token:
+                    continue
+                await asyncio.sleep(0.035)  # GPT-like pace: ~30ms per word
                 yield json.dumps({
                     "type": "text",
-                    "content": chunk
+                    "content": token
                 }) + "\n"
                 num_chunks += 1
             logger.info("[graph] yielded response text chunks count=%d total_len=%d", num_chunks, len(response))

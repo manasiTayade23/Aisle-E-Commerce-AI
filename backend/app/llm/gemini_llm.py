@@ -7,6 +7,27 @@ from app.llm.base import BaseLLM, LLMMessage, ToolCall, StreamEvent
 
 logger = logging.getLogger(__name__)
 
+# User-friendly message when Gemini free-tier quota is exceeded (429).
+# Note: API key from AI Studio uses free tier; GCP $300 credit applies to Vertex AI, not this API.
+GEMINI_QUOTA_MESSAGE = (
+    "Gemini rate limit or quota exceeded (free tier). "
+    "Try: (1) Use GEMINI_MODEL=gemini-1.5-flash in .env (often has quota), "
+    "(2) wait a minute and retry, or (3) use another provider (LLM_PROVIDER=anthropic or openai). "
+    "GCP free credit applies when using Vertex AI, not the AI Studio API key."
+)
+
+
+def _is_quota_exhausted(e: Exception) -> bool:
+    """True if this is a 429 / quota exceeded error from Gemini."""
+    msg = str(e).lower()
+    if "429" in msg or "quota" in msg or "resourceexhausted" in msg or "rate limit" in msg:
+        return True
+    try:
+        from google.api_core.exceptions import ResourceExhausted
+        return type(e).__name__ == "ResourceExhausted" or isinstance(e, ResourceExhausted)
+    except ImportError:
+        return False
+
 
 def _schema_for_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Remove fields Gemini does not accept (e.g. default) from JSON schema."""
@@ -155,8 +176,12 @@ class GeminiLLM(BaseLLM):
                             yield {"type": StreamEvent.TOOL_CALL_START, "id": call_id, "name": name}
                             yield {"type": StreamEvent.TOOL_CALL_END, "id": call_id, "name": name, "input": args}
         except Exception as e:
-            logger.exception("[gemini] stream_chat error")
-            yield {"type": StreamEvent.ERROR, "content": str(e)}
+            if _is_quota_exhausted(e):
+                logger.warning("[gemini] quota exceeded (429): %s", e)
+                yield {"type": StreamEvent.ERROR, "content": GEMINI_QUOTA_MESSAGE}
+            else:
+                logger.exception("[gemini] stream_chat error")
+                yield {"type": StreamEvent.ERROR, "content": str(e)}
 
         yield {"type": StreamEvent.DONE}
     

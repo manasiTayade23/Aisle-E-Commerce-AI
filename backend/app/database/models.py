@@ -11,12 +11,13 @@ Base = declarative_base()
 class User(Base):
     """User model."""
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=True)
+    password_hash = Column(String(255), nullable=True)  # for credentials auth
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     # Relationships
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="user", cascade="all, delete-orphan")

@@ -54,11 +54,11 @@ Respond with ONLY the agent name: search, cart, comparison, or recommendation.
         logger.info("[router] process user_message=%r", user_message[:80] if len(user_message) > 80 else user_message)
 
         # Simple routing logic - can be enhanced with LLM
-        message_lower = user_message.lower()
+        message_lower = user_message.lower().strip()
 
         if any(word in message_lower for word in ["cart", "add", "remove", "quantity", "checkout"]):
             next_agent = "cart"
-        elif any(word in message_lower for word in ["compare", "difference", "vs", "versus", "better"]):
+        elif any(word in message_lower for word in ["compare", "comparison", "difference", "vs", "versus", "better"]) or "comapre" in message_lower or "compair" in message_lower:
             next_agent = "comparison"
         elif any(word in message_lower for word in ["recommend", "suggest", "similar", "like"]):
             next_agent = "recommendation"

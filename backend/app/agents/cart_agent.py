@@ -111,6 +111,19 @@ class CartAgent(BaseAgent):
             
             response_text = final_response if final_response else response_text
         
+        if not (response_text or "").strip():
+            tool_names = [tc.get("name") for tc in tool_calls if tc.get("name")]
+            if "add_to_cart" in tool_names:
+                response_text = "Added to your cart."
+            elif "get_cart" in tool_names:
+                response_text = "Here's your cart."
+            elif "remove_from_cart" in tool_names:
+                response_text = "Removed from your cart."
+            elif "update_cart_quantity" in tool_names:
+                response_text = "Cart updated."
+            else:
+                response_text = "Done."
+        
         messages.append(LLMMessage(role="assistant", content=response_text))
         
         return {

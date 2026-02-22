@@ -3,13 +3,13 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message, Product } from "@/lib/types";
-import { ProductCard } from "./ProductCard";
+import { ProductRow } from "./ProductRow";
 import { CartItemCard } from "./CartItemCard";
 import { ProductComparison } from "./ProductComparison";
 import { ToolIndicator } from "./ToolIndicator";
-import { TypingIndicator } from "./TypingIndicator";
+import { ThinkingStatus } from "./ThinkingStatus";
 import { cn } from "@/lib/cn";
-import { User, Sparkles } from "lucide-react";
+import { User, Store } from "lucide-react";
 
 interface ChatMessageProps {
   message: Message;
@@ -26,33 +26,36 @@ function formatTime(ts?: number) {
 export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessageProps) {
   const isUser = message.role === "user";
 
-  // Detect if we should show comparison view (2 products from search with comparison context)
   const searchResult = message.toolResults?.find((tr) => tr.name === "search_products");
-  const hasExactlyTwoProducts = searchResult?.data.products?.length === 2;
+  const detailResults = message.toolResults?.filter((tr) => tr.name === "get_product_details" && tr.data?.title) ?? [];
+  // Only show comparison when user asked (comparison agent ran: 2 or 3 get_product_details, no search_products)
+  const showComparison =
+    !searchResult &&
+    (detailResults.length === 2 || detailResults.length === 3);
 
   return (
-    <div className={cn("flex gap-3 animate-slide-up", isUser ? "flex-row-reverse" : "flex-row")}>
+    <div className={cn("flex gap-3 sm:gap-4 animate-slide-up", isUser ? "flex-row-reverse" : "flex-row")}>
       {/* Avatar */}
       <div
         className={cn(
-          "flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-2xl shadow-sm",
+          "flex h-9 w-9 sm:h-10 sm:w-10 flex-shrink-0 items-center justify-center rounded-2xl shadow-sm",
           isUser
-            ? "bg-gradient-to-br from-gray-700 to-gray-900 text-white shadow-gray-300/30"
-            : "bg-gradient-to-br from-peach-400 via-rose-400 to-peach-500 text-white shadow-peach-300/30"
+            ? "bg-gradient-to-br from-slate-600 to-slate-800 text-white shadow-slate-400/25"
+            : "bg-slate-800 text-white shadow-slate-400/25"
         )}
       >
-        {isUser ? <User className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+        {isUser ? <User className="h-4 w-4 sm:h-5 sm:w-5" /> : <Store className="h-4 w-4 sm:h-5 sm:w-5" />}
       </div>
 
-      {/* Content */}
-      <div className={cn("flex flex-col gap-2.5 max-w-[82%] min-w-0", isUser ? "items-end" : "items-start")}>
+      {/* Content - full width on desktop, clear user vs assistant styling */}
+      <div className={cn("flex flex-col gap-2.5 min-w-0 flex-1", isUser ? "items-end max-w-[85%] sm:max-w-[75%]" : "items-start w-full max-w-full")}>
         {/* Role label + timestamp */}
         <div className={cn("flex items-center gap-2", isUser ? "flex-row-reverse" : "flex-row")}>
           <span className={cn(
             "text-[11px] font-semibold uppercase tracking-wider",
-            isUser ? "text-gray-500" : "text-peach-600"
+            isUser ? "text-slate-500" : "text-peach-600"
           )}>
-            {isUser ? "You" : "ShopAI"}
+            {isUser ? "You" : "Aisle"}
           </span>
           {message.timestamp && (
             <span className="text-[10px] text-gray-400 font-medium">
@@ -66,23 +69,39 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
           <ToolIndicator key={`tc-${i}`} name={tc.name} />
         ))}
 
-        {/* Product results */}
-        {message.toolResults?.map((tr, i) => {
+        {/* User: bubble. Assistant: streamed title (properly rendered), then product list only — no description */}
+        {message.content && (
+          <>
+            {isUser ? (
+              <div className="rounded-2xl px-4 py-3.5 leading-relaxed bg-slate-700 text-white text-[15px] rounded-tr-sm rounded-bl-2xl rounded-tl-2xl shadow-md shadow-slate-400/20 max-w-full">
+                <p className="leading-relaxed">{message.content}</p>
+              </div>
+            ) : (
+              <div className={cn(
+                "prose-chat markdown-response text-[15px] text-gray-800 leading-relaxed max-w-full",
+                message.isStreaming && "streaming-text"
+              )}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                {message.isStreaming && (
+                  <span className="streaming-cursor ml-0.5 inline-block" aria-hidden />
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Show product list / comparison only after streaming finishes — first streaming, then list */}
+        {!message.isStreaming && message.toolResults?.map((tr, i) => {
           if (tr.name === "search_products" && tr.data.products && tr.data.products.length > 0) {
-            // Show comparison if exactly 2 products
-            if (hasExactlyTwoProducts && tr.data.products.length === 2) {
-              return (
-                <ProductComparison
-                  key={`tr-${i}`}
-                  products={tr.data.products}
-                  onAddToCart={onAddToCart}
-                />
-              );
-            }
+            const singleId = tr.data.products.length === 1 ? tr.data.products[0].id : null;
+            const hasDetailForSingle = singleId != null && message.toolResults?.some(
+              (r) => r.name === "get_product_details" && r.data?.id === singleId
+            );
+            if (hasDetailForSingle) return null;
             return (
-              <div key={`tr-${i}`} className="grid grid-cols-1 gap-2.5 w-full">
+              <div key={`tr-${i}`} className="flex flex-col gap-3 w-full animate-product-pop">
                 {tr.data.products.slice(0, 6).map((p) => (
-                  <ProductCard
+                  <ProductRow
                     key={p.id}
                     product={p}
                     onAddToCart={onAddToCart}
@@ -90,7 +109,7 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
                   />
                 ))}
                 {tr.data.count && tr.data.count > 6 && (
-                  <p className="text-[11px] text-peach-600 text-center py-1 font-semibold">
+                  <p className="text-[12px] text-peach-600 text-center py-2 font-semibold">
                     +{tr.data.count - 6} more results
                   </p>
                 )}
@@ -99,6 +118,7 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
           }
 
           if (tr.name === "get_product_details" && tr.data.title) {
+            if (showComparison) return null;
             const product: Product = {
               id: tr.data.id as number,
               title: tr.data.title as string,
@@ -109,17 +129,12 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
               rating: tr.data.rating as { rate: number; count: number },
             };
             return (
-              <div key={`tr-${i}`} className="w-full">
-                <ProductCard
+              <div key={`tr-${i}`} className="w-full animate-product-pop">
+                <ProductRow
                   product={product}
                   onAddToCart={onAddToCart}
                   onViewDetails={onViewProduct}
                 />
-                {typeof tr.data.description === "string" && (
-                  <p className="mt-2 text-[13px] text-gray-600 line-clamp-3 px-1 leading-relaxed">
-                    {tr.data.description}
-                  </p>
-                )}
               </div>
             );
           }
@@ -144,33 +159,28 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
           return null;
         })}
 
-        {/* Text content */}
-        {message.content && (
-          <div
-            className={cn(
-              "rounded-2xl px-4 py-3 leading-relaxed",
-              isUser
-                ? "bg-gradient-to-br from-gray-800 to-gray-900 text-white text-[15px] rounded-tr-md shadow-lg shadow-gray-300/20"
-                : "bg-white/80 backdrop-blur-sm border border-peach-100/40 text-gray-800 rounded-tl-md shadow-sm shadow-peach-100/20"
-            )}
-          >
-            {isUser ? (
-              <p className="leading-relaxed">{message.content}</p>
-            ) : (
-              <div className="prose-chat markdown-response overflow-x-auto max-w-full">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-              </div>
-            )}
+        {/* Comparison table only when user asked, and only after streaming finishes */}
+        {!message.isStreaming && showComparison && detailResults.length >= 2 && (
+          <div className="flex flex-col gap-3 w-full animate-product-pop">
+            <ProductComparison
+              products={detailResults.slice(0, 3).map((tr) => ({
+                id: tr.data.id as number,
+                title: tr.data.title as string,
+                price: tr.data.price as number,
+                category: tr.data.category as string,
+                image: tr.data.image as string,
+                description: tr.data.description as string,
+                rating: tr.data.rating as { rate: number; count: number },
+              }))}
+              onAddToCart={onAddToCart}
+              onViewDetails={onViewProduct}
+            />
           </div>
         )}
 
-        {/* Streaming indicator */}
+        {/* Streaming / thinking indicator: rotating status when no content yet */}
         {message.isStreaming && !message.content && !message.toolCalls?.length && (
-          <div className="inline-flex items-center gap-2.5 rounded-2xl bg-white/80 backdrop-blur-sm border border-gray-200/60 px-4 py-2.5 shadow-sm rounded-tl-md">
-            <span className="text-base animate-bounce-gentle">🤔</span>
-            <span className="text-[13px] font-medium text-gray-600">Thinking...</span>
-            <TypingIndicator />
-          </div>
+          <ThinkingStatus />
         )}
       </div>
     </div>

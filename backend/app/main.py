@@ -18,15 +18,16 @@ import json
 import logging
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.agent import stream_response
+from app.auth import get_current_user_id, register_user, login_user, LoginRequest, RegisterRequest
 from app.config import get_default_llm_config
 from app.database import init_db
-from app import fake_store
+from app import fake_store, cart
 from app.tools import get_cart_payload
 
 logging.basicConfig(level=logging.INFO)
@@ -104,16 +105,100 @@ async def fakestore_products_by_category(category: str):
 
 
 @app.get("/api/cart")
-async def get_cart(session_id: str | None = None):
-    """Get cart contents for a session. Returns same shape as get_cart tool: { items, total }."""
-    if not session_id:
+async def get_cart(
+    session_id: str | None = None,
+    user_id: int | None = Depends(get_current_user_id),
+):
+    """Get cart contents for a session or authenticated user. Returns { items, total }."""
+    if not session_id and not user_id:
         return {"items": [], "total": 0}
     try:
-        payload = await get_cart_payload(session_id)
+        payload = await get_cart_payload(session_id or "", user_id=user_id)
         return payload
     except Exception as e:
         logger.exception("get_cart failed")
         return JSONResponse(status_code=500, content={"error": str(e), "items": [], "total": 0})
+
+
+class CartAddRequest(BaseModel):
+    session_id: str
+    product_id: int
+    quantity: int = 1
+
+
+class CartUpdateRequest(BaseModel):
+    session_id: str
+    product_id: int
+    quantity: int
+
+
+class CartRemoveRequest(BaseModel):
+    session_id: str
+    product_id: int
+
+
+def _cart_session_or_user(session_id: str, user_id: int | None) -> str:
+    """Use session_id for anonymous; for authenticated users session_id can be empty."""
+    return session_id if not user_id else (session_id or "auth")
+
+
+@app.post("/api/cart/add")
+async def cart_add(
+    req: CartAddRequest,
+    user_id: int | None = Depends(get_current_user_id),
+):
+    """Add item to cart directly (no LLM). Uses auth user if Authorization header set."""
+    try:
+        cart.add_item(req.session_id, req.product_id, req.quantity, user_id=user_id)
+        payload = await get_cart_payload(_cart_session_or_user(req.session_id, user_id), user_id=user_id)
+        return payload
+    except Exception as e:
+        logger.exception("cart add failed")
+        return JSONResponse(status_code=500, content={"error": str(e), "items": [], "total": 0})
+
+
+@app.post("/api/cart/update")
+async def cart_update(
+    req: CartUpdateRequest,
+    user_id: int | None = Depends(get_current_user_id),
+):
+    """Update cart item quantity directly (no LLM)."""
+    try:
+        cart.update_quantity(req.session_id, req.product_id, req.quantity, user_id=user_id)
+        payload = await get_cart_payload(_cart_session_or_user(req.session_id, user_id), user_id=user_id)
+        return payload
+    except Exception as e:
+        logger.exception("cart update failed")
+        return JSONResponse(status_code=500, content={"error": str(e), "items": [], "total": 0})
+
+
+@app.post("/api/cart/remove")
+async def cart_remove(
+    req: CartRemoveRequest,
+    user_id: int | None = Depends(get_current_user_id),
+):
+    """Remove item from cart directly (no LLM)."""
+    try:
+        cart.remove_item(req.session_id, req.product_id, user_id=user_id)
+        payload = await get_cart_payload(_cart_session_or_user(req.session_id, user_id), user_id=user_id)
+        return payload
+    except Exception as e:
+        logger.exception("cart remove failed")
+        return JSONResponse(status_code=500, content={"error": str(e), "items": [], "total": 0})
+
+
+# ----- Auth (for NextAuth + database-backed cart) -----
+
+@app.post("/auth/register")
+async def auth_register(req: RegisterRequest):
+    """Register a new user. Returns user_id, email, name, access_token."""
+    return register_user(req.email, req.password, req.name)
+
+
+@app.post("/auth/login")
+async def auth_login(req: LoginRequest):
+    """Login. Returns user_id, email, name, access_token."""
+    return login_user(req.email, req.password)
 
 
 @app.get("/health")
@@ -133,8 +218,8 @@ async def health():
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest):
-    """Chat endpoint with LangGraph multi-agent system."""
+async def chat(req: ChatRequest, user_id: int | None = Depends(get_current_user_id)):
+    """Chat endpoint with LangGraph multi-agent system. Uses authenticated user's cart when logged in."""
     try:
         llm_config = get_default_llm_config()
         if not llm_config.get("api_key") or llm_config.get("api_key") == "your-api-key-here":
@@ -152,14 +237,14 @@ async def chat(req: ChatRequest):
         )
 
     session_id = req.session_id or str(uuid.uuid4())
-    logger.info("[chat] POST /chat received message=%r session_id=%s", req.message[:80] if len(req.message) > 80 else req.message, session_id)
+    logger.info("[chat] POST /chat received message=%r session_id=%s user_id=%s", req.message[:80] if len(req.message) > 80 else req.message, session_id, user_id)
 
     async def event_stream():
         logger.info("[chat] event_stream: yielding session chunk")
         yield json.dumps({"type": "session", "session_id": session_id}) + "\n"
         try:
             chunk_count = 0
-            async for chunk in stream_response(session_id, req.message):
+            async for chunk in stream_response(session_id, req.message, user_id=user_id):
                 chunk_count += 1
                 yield chunk
             logger.info("[chat] event_stream: finished stream_response chunk_count=%d", chunk_count)

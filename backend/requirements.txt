@@ -27,6 +27,10 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 redis>=5.0.0
 
+# Auth (JWT + password hashing)
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
+
 
 # Additional utilities
 python-multipart==0.0.12

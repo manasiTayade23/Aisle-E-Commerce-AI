@@ -12,11 +12,79 @@ export interface CartResponse {
   total: number;
 }
 
-export async function fetchCart(sessionId: string | null): Promise<CartResponse> {
-  if (!sessionId) return { items: [], total: 0 };
-  const url = `${API_URL}/api/cart?session_id=${encodeURIComponent(sessionId)}`;
-  const resp = await fetch(url);
+function authHeaders(accessToken: string | null | undefined): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (accessToken) h["Authorization"] = `Bearer ${accessToken}`;
+  return h;
+}
+
+export async function fetchCart(
+  sessionId: string | null,
+  accessToken?: string | null
+): Promise<CartResponse> {
+  if (!sessionId && !accessToken) return { items: [], total: 0 };
+  const url = `${API_URL}/api/cart?session_id=${encodeURIComponent(sessionId || "")}`;
+  const resp = await fetch(url, { headers: authHeaders(accessToken) });
   if (!resp.ok) return { items: [], total: 0 };
+  const data = await resp.json();
+  return { items: data.items ?? [], total: Number(data.total) ?? 0 };
+}
+
+/** Add item to cart directly (no LLM). Returns updated cart. Uses sessionId or auth token. */
+export async function addToCartDirect(
+  sessionId: string,
+  productId: number,
+  quantity: number = 1,
+  accessToken?: string | null
+): Promise<CartResponse> {
+  const resp = await fetch(`${API_URL}/api/cart/add`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    body: JSON.stringify({ session_id: sessionId, product_id: productId, quantity }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to add to cart");
+  }
+  const data = await resp.json();
+  return { items: data.items ?? [], total: Number(data.total) ?? 0 };
+}
+
+/** Update cart item quantity directly (no LLM). */
+export async function updateCartQuantityDirect(
+  sessionId: string,
+  productId: number,
+  quantity: number,
+  accessToken?: string | null
+): Promise<CartResponse> {
+  const resp = await fetch(`${API_URL}/api/cart/update`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    body: JSON.stringify({ session_id: sessionId, product_id: productId, quantity }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to update cart");
+  }
+  const data = await resp.json();
+  return { items: data.items ?? [], total: Number(data.total) ?? 0 };
+}
+
+/** Remove item from cart directly (no LLM). */
+export async function removeFromCartDirect(
+  sessionId: string,
+  productId: number,
+  accessToken?: string | null
+): Promise<CartResponse> {
+  const resp = await fetch(`${API_URL}/api/cart/remove`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    body: JSON.stringify({ session_id: sessionId, product_id: productId }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to remove from cart");
+  }
   const data = await resp.json();
   return { items: data.items ?? [], total: Number(data.total) ?? 0 };
 }
@@ -24,11 +92,14 @@ export async function fetchCart(sessionId: string | null): Promise<CartResponse>
 export async function sendMessage(
   message: string,
   sessionId: string | null,
-  onChunk: (data: Record<string, unknown>) => void
+  onChunk: (data: Record<string, unknown>) => void,
+  accessToken?: string | null
 ): Promise<string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
   const resp = await fetch(`${API_URL}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message, session_id: sessionId }),
   });
 
