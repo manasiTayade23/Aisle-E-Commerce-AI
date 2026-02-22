@@ -6,3 +6,11 @@ __pycache__/
 .venv/
 dist/
 build/
+
+# DB files
+*.db
+*.sqlite3
+
+# ML models
+backend/torch/
+backend/chroma_db/
