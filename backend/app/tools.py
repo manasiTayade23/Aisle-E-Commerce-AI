@@ -1,0 +1,191 @@
+"""Tool definitions and execution for the AI agent."""
+
+from __future__ import annotations
+
+import json
+from app import fake_store, cart
+
+# ---------- Claude tool schemas ----------
+
+TOOL_DEFINITIONS = [
+    {
+        "name": "search_products",
+        "description": (
+            "Search and filter products from the store. "
+            "You can filter by keyword query, category, and/or price range. "
+            "Returns a list of matching products with id, title, price, category, image, and rating."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional keyword to search in product titles and descriptions.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional category filter. Valid categories: electronics, jewelery, men's clothing, women's clothing.",
+                },
+                "min_price": {
+                    "type": "number",
+                    "description": "Optional minimum price filter.",
+                },
+                "max_price": {
+                    "type": "number",
+                    "description": "Optional maximum price filter.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_product_details",
+        "description": "Get full details for a single product by its ID, including title, price, description, category, image URL, and rating.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product_id": {
+                    "type": "integer",
+                    "description": "The product ID to look up.",
+                }
+            },
+            "required": ["product_id"],
+        },
+    },
+    {
+        "name": "add_to_cart",
+        "description": "Add a product to the user's shopping cart.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product_id": {
+                    "type": "integer",
+                    "description": "The product ID to add.",
+                },
+                "quantity": {
+                    "type": "integer",
+                    "description": "Quantity to add (default 1).",
+                    "default": 1,
+                },
+            },
+            "required": ["product_id"],
+        },
+    },
+    {
+        "name": "get_cart",
+        "description": "Get the current contents of the user's shopping cart, including product details and total price.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "remove_from_cart",
+        "description": "Remove a product from the user's shopping cart.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product_id": {
+                    "type": "integer",
+                    "description": "The product ID to remove.",
+                }
+            },
+            "required": ["product_id"],
+        },
+    },
+    {
+        "name": "update_cart_quantity",
+        "description": "Update the quantity of a product already in the cart.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product_id": {
+                    "type": "integer",
+                    "description": "The product ID.",
+                },
+                "quantity": {
+                    "type": "integer",
+                    "description": "New quantity. Set to 0 to remove.",
+                },
+            },
+            "required": ["product_id", "quantity"],
+        },
+    },
+]
+
+
+async def execute_tool(name: str, input_data: dict, session_id: str) -> str:
+    """Execute a tool and return the JSON string result."""
+
+    if name == "search_products":
+        query = input_data.get("query", "").lower()
+        category = input_data.get("category", "")
+        min_price = input_data.get("min_price")
+        max_price = input_data.get("max_price")
+
+        if category:
+            products = await fake_store.get_products_by_category(category)
+        else:
+            products = await fake_store.get_all_products()
+
+        results = []
+        for p in products:
+            if query and query not in p["title"].lower() and query not in p.get("description", "").lower():
+                continue
+            if min_price is not None and p["price"] < min_price:
+                continue
+            if max_price is not None and p["price"] > max_price:
+                continue
+            results.append({
+                "id": p["id"],
+                "title": p["title"],
+                "price": p["price"],
+                "category": p["category"],
+                "image": p["image"],
+                "rating": p["rating"],
+            })
+        return json.dumps({"products": results, "count": len(results)})
+
+    elif name == "get_product_details":
+        product = await fake_store.get_product(input_data["product_id"])
+        return json.dumps(product)
+
+    elif name == "add_to_cart":
+        quantity = input_data.get("quantity", 1)
+        cart_data = cart.add_item(session_id, input_data["product_id"], quantity)
+        return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
+
+    elif name == "get_cart":
+        cart_data = cart.get_cart(session_id)
+        if not cart_data:
+            return json.dumps({"items": [], "total": 0})
+
+        items = []
+        total = 0.0
+        for pid, qty in cart_data.items():
+            try:
+                product = await fake_store.get_product(pid)
+                item_total = product["price"] * qty
+                total += item_total
+                items.append({
+                    "product_id": pid,
+                    "title": product["title"],
+                    "price": product["price"],
+                    "quantity": qty,
+                    "item_total": round(item_total, 2),
+                    "image": product["image"],
+                })
+            except Exception:
+                continue
+        return json.dumps({"items": items, "total": round(total, 2)})
+
+    elif name == "remove_from_cart":
+        cart_data = cart.remove_item(session_id, input_data["product_id"])
+        return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
+
+    elif name == "update_cart_quantity":
+        cart_data = cart.update_quantity(session_id, input_data["product_id"], input_data["quantity"])
+        return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
+
+    return json.dumps({"error": f"Unknown tool: {name}"})
