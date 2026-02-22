@@ -1,5 +1,26 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+export interface CartResponse {
+  items: Array<{
+    product_id: number;
+    title: string;
+    price: number;
+    quantity: number;
+    item_total: number;
+    image: string;
+  }>;
+  total: number;
+}
+
+export async function fetchCart(sessionId: string | null): Promise<CartResponse> {
+  if (!sessionId) return { items: [], total: 0 };
+  const url = `${API_URL}/api/cart?session_id=${encodeURIComponent(sessionId)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) return { items: [], total: 0 };
+  const data = await resp.json();
+  return { items: data.items ?? [], total: Number(data.total) ?? 0 };
+}
+
 export async function sendMessage(
   message: string,
   sessionId: string | null,

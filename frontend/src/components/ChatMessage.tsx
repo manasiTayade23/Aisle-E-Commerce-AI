@@ -1,6 +1,7 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Message, Product } from "@/lib/types";
 import { ProductCard } from "./ProductCard";
 import { CartItemCard } from "./CartItemCard";
@@ -156,8 +157,8 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
             {isUser ? (
               <p className="leading-relaxed">{message.content}</p>
             ) : (
-              <div className="prose-chat">
-                <ReactMarkdown>{message.content}</ReactMarkdown>
+              <div className="prose-chat markdown-response overflow-x-auto max-w-full">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
               </div>
             )}
           </div>

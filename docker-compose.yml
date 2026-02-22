@@ -10,6 +10,9 @@ services:
     environment:
       - BACKEND_HOST=0.0.0.0
       - BACKEND_PORT=8000
+    volumes:
+      - ./backend/chroma_db:/app/chroma_db
+      - ./backend/shopping_assistant.db:/app/shopping_assistant.db
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -28,3 +31,18 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  # Optional: PostgreSQL database (uncomment if using PostgreSQL)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: shopping_assistant
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+
+# volumes:
+#   postgres_data:

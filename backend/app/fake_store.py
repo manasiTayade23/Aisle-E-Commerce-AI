@@ -1,7 +1,7 @@
 import httpx
-from app.config import FAKE_STORE_BASE_URL
+from app.config import FAKE_STORE_BASE_URL, FAKE_STORE_TIMEOUT
 
-_client = httpx.AsyncClient(base_url=FAKE_STORE_BASE_URL, timeout=15.0)
+_client = httpx.AsyncClient(base_url=FAKE_STORE_BASE_URL, timeout=FAKE_STORE_TIMEOUT)
 
 
 async def get_all_products() -> list[dict]:

@@ -16,6 +16,7 @@ export function CartDrawer({ isOpen, onClose, items, onUpdateQuantity, onRemoveI
   const subtotal = items.reduce((sum, item) => sum + item.item_total, 0);
   const tax = subtotal * 0.08;
   const total = subtotal + tax;
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
 
   return (
     <>
@@ -43,7 +44,7 @@ export function CartDrawer({ isOpen, onClose, items, onUpdateQuantity, onRemoveI
             </div>
             <div>
               <h2 className="text-[15px] font-bold text-gray-900">Shopping Cart</h2>
-              <p className="text-[11px] text-gray-400 font-medium">{items.length} item{items.length !== 1 ? "s" : ""}</p>
+              <p className="text-[11px] text-gray-400 font-medium">{totalQuantity} item{totalQuantity !== 1 ? "s" : ""}</p>
             </div>
           </div>
           <button

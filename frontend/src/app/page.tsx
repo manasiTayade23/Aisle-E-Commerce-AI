@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Message, ToolCallData, ToolResultData, Conversation, Product, CartItem } from "@/lib/types";
-import { sendMessage } from "@/lib/api";
+import { sendMessage, fetchCart } from "@/lib/api";
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ChatInput";
 import { Sidebar } from "@/components/Sidebar";
@@ -28,21 +28,20 @@ export default function Home() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeCategory, setActiveCategory] = useState("all");
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
 
-  // Extract cart items from latest cart tool result
-  const cartItems = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.toolResults) {
-        for (const tr of msg.toolResults) {
-          if (tr.name === "get_cart" && tr.data.items) {
-            return tr.data.items;
-          }
-        }
-      }
-    }
-    return [] as CartItem[];
-  }, [messages]);
+  // Fetch cart from backend for current session (single source of truth)
+  const refetchCart = useCallback(async () => {
+    const res = await fetchCart(sessionId);
+    setCartItems(res.items);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (sessionId) refetchCart();
+    else setCartItems([]);
+  }, [sessionId, refetchCart]);
+
+  const cartItemCount = cartItems.reduce((s, i) => s + i.quantity, 0);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -155,6 +154,11 @@ export default function Home() {
             ];
           });
         }
+        // Refresh cart so sidebar/drawer reflect any add/remove/update from this turn
+        if (newSessionId) {
+          const res = await fetchCart(newSessionId);
+          setCartItems(res.items);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong");
         setMessages((prev) =>
@@ -224,8 +228,11 @@ export default function Home() {
         activeConversationId={sessionId}
         onNewChat={handleClear}
         onSelectConversation={() => {}}
-        cartItemCount={cartItems.length}
-        onOpenCart={() => setCartOpen(true)}
+        cartItemCount={cartItemCount}
+        onOpenCart={() => {
+          if (sessionId) refetchCart();
+          setCartOpen(true);
+        }}
       />
 
       {/* Main content */}
@@ -281,13 +288,16 @@ export default function Home() {
 
             {/* Cart button */}
             <button
-              onClick={() => setCartOpen(true)}
+              onClick={() => {
+                if (sessionId) refetchCart();
+                setCartOpen(true);
+              }}
               className="relative flex h-9 w-9 items-center justify-center rounded-xl hover:bg-peach-50/80 transition-colors"
             >
               <ShoppingCart className="h-5 w-5 text-gray-600" />
-              {cartItems.length > 0 && (
+              {cartItemCount > 0 && (
                 <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-peach-500 to-rose-500 text-[9px] font-bold text-white shadow-sm animate-bounce-gentle">
-                  {cartItems.length}
+                  {cartItemCount}
                 </span>
               )}
             </button>

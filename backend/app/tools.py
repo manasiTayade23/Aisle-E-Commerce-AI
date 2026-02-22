@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from app import fake_store, cart
+
+logger = logging.getLogger(__name__)
 
 # ---------- Claude tool schemas ----------
 
@@ -64,8 +67,7 @@ TOOL_DEFINITIONS = [
                 },
                 "quantity": {
                     "type": "integer",
-                    "description": "Quantity to add (default 1).",
-                    "default": 1,
+                    "description": "Quantity to add (default 1). Omit for 1.",
                 },
             },
             "required": ["product_id"],
@@ -115,8 +117,34 @@ TOOL_DEFINITIONS = [
 ]
 
 
+async def get_cart_payload(session_id: str) -> dict:
+    """Return cart as { items: [...], total: float } for a given session. Used by get_cart tool and GET /api/cart."""
+    cart_data = cart.get_cart(session_id)
+    if not cart_data:
+        return {"items": [], "total": 0}
+    items = []
+    total = 0.0
+    for pid, qty in cart_data.items():
+        try:
+            product = await fake_store.get_product(pid)
+            item_total = product["price"] * qty
+            total += item_total
+            items.append({
+                "product_id": pid,
+                "title": product["title"],
+                "price": product["price"],
+                "quantity": qty,
+                "item_total": round(item_total, 2),
+                "image": product["image"],
+            })
+        except Exception:
+            continue
+    return {"items": items, "total": round(total, 2)}
+
+
 async def execute_tool(name: str, input_data: dict, session_id: str) -> str:
     """Execute a tool and return the JSON string result."""
+    logger.info("[tools] execute_tool name=%s input=%s session_id=%s", name, input_data, session_id)
 
     if name == "search_products":
         query = input_data.get("query", "").lower()
@@ -145,47 +173,34 @@ async def execute_tool(name: str, input_data: dict, session_id: str) -> str:
                 "image": p["image"],
                 "rating": p["rating"],
             })
-        return json.dumps({"products": results, "count": len(results)})
+        out = json.dumps({"products": results, "count": len(results)})
+        logger.info("[tools] search_products done count=%d", len(results))
+        return out
 
     elif name == "get_product_details":
         product = await fake_store.get_product(input_data["product_id"])
+        logger.info("[tools] get_product_details done product_id=%s", input_data.get("product_id"))
         return json.dumps(product)
 
     elif name == "add_to_cart":
         quantity = input_data.get("quantity", 1)
         cart_data = cart.add_item(session_id, input_data["product_id"], quantity)
+        logger.info("[tools] add_to_cart done")
         return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
 
     elif name == "get_cart":
-        cart_data = cart.get_cart(session_id)
-        if not cart_data:
-            return json.dumps({"items": [], "total": 0})
-
-        items = []
-        total = 0.0
-        for pid, qty in cart_data.items():
-            try:
-                product = await fake_store.get_product(pid)
-                item_total = product["price"] * qty
-                total += item_total
-                items.append({
-                    "product_id": pid,
-                    "title": product["title"],
-                    "price": product["price"],
-                    "quantity": qty,
-                    "item_total": round(item_total, 2),
-                    "image": product["image"],
-                })
-            except Exception:
-                continue
-        return json.dumps({"items": items, "total": round(total, 2)})
+        payload = await get_cart_payload(session_id)
+        logger.info("[tools] get_cart done items=%d total=%s", len(payload["items"]), payload["total"])
+        return json.dumps(payload)
 
     elif name == "remove_from_cart":
         cart_data = cart.remove_item(session_id, input_data["product_id"])
+        logger.info("[tools] remove_from_cart done")
         return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
 
     elif name == "update_cart_quantity":
         cart_data = cart.update_quantity(session_id, input_data["product_id"], input_data["quantity"])
         return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
 
+    logger.warning("[tools] unknown tool name=%s", name)
     return json.dumps({"error": f"Unknown tool: {name}"})

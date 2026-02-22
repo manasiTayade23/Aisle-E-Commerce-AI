@@ -1,14 +1,18 @@
-"""Claude-based conversational shopping agent with streaming support."""
+"""LLM-agnostic conversational shopping agent with LangGraph multi-agent support."""
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import AsyncGenerator
-from anthropic import AsyncAnthropic
-from app.config import ANTHROPIC_API_KEY, MODEL_NAME
+from app.config import LLM_PROVIDER
+from app.graph import ShoppingGraph
 from app.tools import TOOL_DEFINITIONS, execute_tool
 
-client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+logger = logging.getLogger(__name__)
+
+# Initialize graph (lazy initialization)
+_graph_instance = None
 
 SYSTEM_PROMPT = """You are a friendly and knowledgeable e-commerce shopping assistant. You help users discover products, compare items, and manage their shopping cart through natural conversation.
 
@@ -33,6 +37,7 @@ SYSTEM_PROMPT = """You are a friendly and knowledgeable e-commerce shopping assi
 5. If the user's request is ambiguous, ask for clarification.
 6. Use the tools available to you — always call the appropriate tool rather than guessing product data.
 7. When referencing products from previous results, use the correct product IDs.
+8. After showing a list or comparison, you may suggest short follow-ups (e.g. "You can say 'Add the cheaper one to my cart' or 'Compare the first two'") to make the next step obvious.
 
 ## Formatting
 - Use markdown for formatting responses
@@ -42,106 +47,63 @@ SYSTEM_PROMPT = """You are a friendly and knowledgeable e-commerce shopping assi
 - When displaying multiple products, use a consistent card-like format
 """
 
-# Store conversation history per session
-_conversations: dict[str, list[dict]] = {}
+from app.conversation_store import get_messages as store_get_messages, append_messages as store_append_messages
 
 
-def _get_messages(session_id: str) -> list[dict]:
-    return _conversations.setdefault(session_id, [])
+def _get_graph() -> ShoppingGraph:
+    """Get or create graph instance."""
+    global _graph_instance
+    if _graph_instance is None:
+        _graph_instance = ShoppingGraph(llm_provider=LLM_PROVIDER)
+    return _graph_instance
 
 
 async def stream_response(session_id: str, user_message: str) -> AsyncGenerator[str, None]:
-    """Stream the agent's response, handling tool calls in a loop."""
-    messages = _get_messages(session_id)
-    messages.append({"role": "user", "content": user_message})
+    """Stream the agent's response using LangGraph multi-agent system."""
+    logger.info("[agent] stream_response called session_id=%s user_message=%r", session_id, user_message[:60] if len(user_message) > 60 else user_message)
+    messages = await store_get_messages(session_id)
+    logger.info("[agent] conversation history length=%d", len(messages))
 
-    while True:
-        # Stream from Claude
-        collected_content = []
-        current_text = ""
-        tool_uses = []
+    # Get graph instance
+    graph = _get_graph()
+    logger.info("[agent] got graph, calling graph.stream_response")
 
-        async with client.messages.stream(
-            model=MODEL_NAME,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOL_DEFINITIONS,
-            messages=messages,
-        ) as stream:
-            async for event in stream:
-                if event.type == "content_block_start":
-                    if event.content_block.type == "text":
-                        current_text = ""
-                    elif event.content_block.type == "tool_use":
-                        tool_uses.append({
-                            "id": event.content_block.id,
-                            "name": event.content_block.name,
-                            "input_json": "",
-                        })
-                elif event.type == "content_block_delta":
-                    if event.delta.type == "text_delta":
-                        current_text += event.delta.text
-                        yield json.dumps({"type": "text", "content": event.delta.text}) + "\n"
-                    elif event.delta.type == "input_json_delta":
-                        if tool_uses:
-                            tool_uses[-1]["input_json"] += event.delta.partial_json
-                elif event.type == "content_block_stop":
-                    if current_text:
-                        collected_content.append({"type": "text", "text": current_text})
-                        current_text = ""
+    # Convert messages to LLMMessage format for graph
+    conversation_history = []
+    for msg in messages:
+        from app.llm.base import LLMMessage
+        conversation_history.append(LLMMessage(
+            role=msg.get("role", "user"),
+            content=msg.get("content", "")
+        ))
 
-            final_message = await stream.get_final_message()
+    # Stream response and accumulate for conversation history
+    response_text = ""
+    product_ids_from_search = []
+    async for chunk in graph.stream_response(session_id, user_message, conversation_history):
+        yield chunk
+        # Parse chunk to persist context for follow-up (e.g. "compare the first two")
+        try:
+            line = chunk.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            if obj.get("type") == "text":
+                response_text += obj.get("content", "")
+            elif obj.get("type") == "tool_result" and obj.get("name") == "search_products":
+                data = obj.get("data") or {}
+                products = data.get("products") or []
+                product_ids_from_search = [p.get("id") for p in products if p.get("id") is not None]
+        except (json.JSONDecodeError, TypeError):
+            pass
 
-        # Build assistant message content
-        assistant_content = []
-        for block in collected_content:
-            assistant_content.append(block)
-        for tu in tool_uses:
-            try:
-                parsed_input = json.loads(tu["input_json"]) if tu["input_json"] else {}
-            except json.JSONDecodeError:
-                parsed_input = {}
-            assistant_content.append({
-                "type": "tool_use",
-                "id": tu["id"],
-                "name": tu["name"],
-                "input": parsed_input,
-            })
-
-        messages.append({"role": "assistant", "content": assistant_content})
-
-        # If there are no tool uses, we're done
-        if not tool_uses:
-            break
-
-        # Execute tools and add results
-        tool_results = []
-        for tu in tool_uses:
-            try:
-                parsed_input = json.loads(tu["input_json"]) if tu["input_json"] else {}
-            except json.JSONDecodeError:
-                parsed_input = {}
-
-            yield json.dumps({"type": "tool_call", "name": tu["name"], "input": parsed_input}) + "\n"
-
-            result = await execute_tool(tu["name"], parsed_input, session_id)
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tu["id"],
-                "content": result,
-            })
-
-            # Send tool result data to frontend for rendering
-            try:
-                result_data = json.loads(result)
-                yield json.dumps({"type": "tool_result", "name": tu["name"], "data": result_data}) + "\n"
-            except json.JSONDecodeError:
-                pass
-
-        messages.append({"role": "user", "content": tool_results})
-
-    # Trim conversation history to last 40 messages to avoid token overflow
-    if len(messages) > 40:
-        _conversations[session_id] = messages[-40:]
-
-    yield json.dumps({"type": "done"}) + "\n"
+    logger.info("[agent] graph.stream_response finished, updating conversation history")
+    assistant_content = response_text
+    if product_ids_from_search:
+        ids_ctx = ", ".join(f"ID {pid}" for pid in product_ids_from_search)
+        assistant_content = response_text + f"\n\n[Products listed above, in order: {ids_ctx}]"
+    messages = await store_append_messages(session_id, [
+        {"role": "user", "content": user_message},
+        {"role": "assistant", "content": assistant_content},
+    ])
+    logger.info("[agent] stream_response done messages_count=%d", len(messages))
