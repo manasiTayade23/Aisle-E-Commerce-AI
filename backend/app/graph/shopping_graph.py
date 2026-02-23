@@ -72,6 +72,7 @@ class GraphState(TypedDict, total=False):
     messages: list
     response: str
     tool_calls: list
+    tool_results: list  # [{ "name": str, "data": dict }] - from agent execution, so graph does not re-run tools
     agent: str
     next_agent: str
     rag_context: list
@@ -207,37 +208,46 @@ class ShoppingGraph:
         }) + "\n"
         logger.info("[graph] yielded type=agent agent=%s", agent_name)
 
-        # Execute tools and stream results
+        # Stream tool calls and results (use agent's results to avoid double-execution, e.g. add_to_cart twice)
+        tool_results = final_state.get("tool_results") or []
+        use_precomputed = len(tool_results) == len(tool_calls)
+
         for i, tool_call in enumerate(tool_calls):
             tool_name = tool_call.get("name")
             tool_input = tool_call.get("input", {})
 
             logger.info("[graph] tool_call[%d] name=%s input=%s", i, tool_name, tool_input)
-            # Stream tool call
             yield json.dumps({
                 "type": "tool_call",
                 "name": tool_name,
                 "input": tool_input,
             }) + "\n"
 
-            # Execute tool (pass user_id so cart uses same DB cart as UI for logged-in users)
-            try:
-                uid = state.get("user_id")
-                result = await execute_tool(tool_name, tool_input, session_id, user_id=uid)
-                result_data = json.loads(result)
-
+            if use_precomputed and i < len(tool_results):
+                result_data = tool_results[i].get("data", {})
                 yield json.dumps({
                     "type": "tool_result",
                     "name": tool_name,
                     "data": result_data,
                 }) + "\n"
-                logger.info("[graph] tool_result[%d] name=%s result_keys=%s", i, tool_name, list(result_data.keys()) if isinstance(result_data, dict) else "n/a")
-            except Exception as e:
-                logger.exception("[graph] tool execution failed name=%s", tool_name)
-                yield json.dumps({
-                    "type": "error",
-                    "content": f"Tool execution error: {str(e)}"
-                }) + "\n"
+                logger.info("[graph] tool_result[%d] name=%s (from agent)", i, tool_name)
+            else:
+                try:
+                    uid = state.get("user_id")
+                    result = await execute_tool(tool_name, tool_input, session_id, user_id=uid)
+                    result_data = json.loads(result)
+                    yield json.dumps({
+                        "type": "tool_result",
+                        "name": tool_name,
+                        "data": result_data,
+                    }) + "\n"
+                    logger.info("[graph] tool_result[%d] name=%s result_keys=%s", i, tool_name, list(result_data.keys()) if isinstance(result_data, dict) else "n/a")
+                except Exception as e:
+                    logger.exception("[graph] tool execution failed name=%s", tool_name)
+                    yield json.dumps({
+                        "type": "error",
+                        "content": f"Tool execution error: {str(e)}"
+                    }) + "\n"
 
         # Stream response text word-by-word (and small punctuation runs) for GPT-like streaming
         if response:

@@ -139,17 +139,24 @@ export function ChatMessage({ message, onAddToCart, onViewProduct }: ChatMessage
             );
           }
 
-          if (tr.name === "get_cart" && tr.data.items) {
-            if (tr.data.items.length === 0) return null;
+          // Cart display: get_cart returns { items, total }; add/remove/update/clear_cart return { success, cart: { items, total } }
+          const cartPayload =
+            tr.name === "get_cart"
+              ? tr.data
+              : (tr.name === "add_to_cart" || tr.name === "remove_from_cart" || tr.name === "update_cart_quantity" || tr.name === "clear_cart") && tr.data?.cart
+              ? tr.data.cart
+              : null;
+          if (cartPayload?.items) {
+            if (cartPayload.items.length === 0) return null;
             return (
               <div key={`tr-${i}`} className="flex flex-col gap-2.5 w-full">
-                {tr.data.items.map((item) => (
+                {cartPayload.items.map((item: { product_id: number; title: string; price: number; quantity: number; item_total: number; image?: string }) => (
                   <CartItemCard key={item.product_id} item={item} />
                 ))}
                 <div className="flex justify-between items-center px-4 py-3 rounded-2xl bg-gradient-to-r from-peach-50/80 to-rose-50/80 border border-peach-100/40">
                   <span className="text-sm font-semibold text-peach-600">Total</span>
                   <span className="text-lg font-bold text-gradient">
-                    ${tr.data.total?.toFixed(2)}
+                    ${(cartPayload.total ?? 0).toFixed(2)}
                   </span>
                 </div>
               </div>

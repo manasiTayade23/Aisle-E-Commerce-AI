@@ -1,5 +1,6 @@
 """Product comparison agent."""
 
+import json
 import logging
 from typing import Dict, Any, List
 from app.agents.base_agent import BaseAgent
@@ -144,6 +145,7 @@ The user was recently shown these product IDs in order: {ids_str}.
                 })
         
         # Execute tools
+        tool_results_for_graph = []
         if tool_calls:
             tool_results = []
             for tool_call in tool_calls:
@@ -156,6 +158,10 @@ The user was recently shown these product IDs in order: {ids_str}.
                     "name": tool_name,
                     "content": result,
                 })
+                try:
+                    tool_results_for_graph.append({"name": tool_name, "data": json.loads(result)})
+                except (TypeError, json.JSONDecodeError):
+                    tool_results_for_graph.append({"name": tool_name, "data": {"raw": result}})
             
             messages.append(LLMMessage(role="assistant", content=assistant_content))
             messages.append(LLMMessage(role="user", content=tool_results))
@@ -179,5 +185,6 @@ The user was recently shown these product IDs in order: {ids_str}.
             "messages": messages,
             "response": response_text,
             "tool_calls": tool_calls,
+            "tool_results": tool_results_for_graph,
             "agent": self.name,
         }

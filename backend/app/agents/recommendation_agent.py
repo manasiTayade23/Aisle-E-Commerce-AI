@@ -1,5 +1,6 @@
 """Product recommendation agent using RAG."""
 
+import json
 from typing import Dict, Any, List
 from app.agents.base_agent import BaseAgent
 from app.llm.base import BaseLLM, LLMMessage
@@ -96,6 +97,7 @@ class RecommendationAgent(BaseAgent):
                 })
         
         # Execute tools
+        tool_results_for_graph = []
         if tool_calls:
             tool_results = []
             for tool_call in tool_calls:
@@ -108,6 +110,10 @@ class RecommendationAgent(BaseAgent):
                     "name": tool_name,
                     "content": result,
                 })
+                try:
+                    tool_results_for_graph.append({"name": tool_name, "data": json.loads(result)})
+                except (TypeError, json.JSONDecodeError):
+                    tool_results_for_graph.append({"name": tool_name, "data": {"raw": result}})
             
             messages.append(LLMMessage(role="assistant", content=assistant_content))
             messages.append(LLMMessage(role="user", content=tool_results))
@@ -131,6 +137,7 @@ class RecommendationAgent(BaseAgent):
             "messages": messages,
             "response": response_text,
             "tool_calls": tool_calls,
+            "tool_results": tool_results_for_graph,
             "agent": self.name,
             "rag_context": relevant_products,
         }

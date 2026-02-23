@@ -59,7 +59,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "add_to_cart",
-        "description": "Add a product to the user's shopping cart.",
+        "description": "Add a product to the user's shopping cart. Use quantity=1 unless the user explicitly asks for more (e.g. 'add 2', 'add three'). Do not call this tool twice for the same product in one request.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -69,7 +69,7 @@ TOOL_DEFINITIONS = [
                 },
                 "quantity": {
                     "type": "integer",
-                    "description": "Quantity to add (default 1). Omit for 1.",
+                    "description": "Number to add. Default 1. Use 2 or more only when the user explicitly says so (e.g. 'add 2', 'add three').",
                 },
             },
             "required": ["product_id"],
@@ -86,7 +86,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "remove_from_cart",
-        "description": "Remove a product from the user's shopping cart.",
+        "description": "Remove a product entirely from the cart (all of its quantity). Do NOT use for 'remove one quantity' or 'reduce by one' — use update_cart_quantity with new quantity = current - 1 instead.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -100,20 +100,29 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "update_cart_quantity",
-        "description": "Update the quantity of a product already in the cart.",
+        "description": "Set the new quantity for a product in the cart. Use for 'remove one quantity', 'reduce by one', 'take one off' (call get_cart first to get current quantity, then pass quantity = current - 1). Also use to set an exact quantity (e.g. change to 2). Set quantity to 0 to remove the line.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "product_id": {
                     "type": "integer",
-                    "description": "The product ID.",
+                    "description": "The product ID (from get_cart).",
                 },
                 "quantity": {
                     "type": "integer",
-                    "description": "New quantity. Set to 0 to remove.",
+                    "description": "New quantity. Use current_quantity - 1 to reduce by one. Set to 0 to remove.",
                 },
             },
             "required": ["product_id", "quantity"],
+        },
+    },
+    {
+        "name": "clear_cart",
+        "description": "Remove all items from the user's shopping cart. Use when the user says 'clear cart', 'empty cart', 'remove everything', 'clear my cart', etc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
 ]
@@ -223,10 +232,18 @@ async def execute_tool(
         return json.dumps(product)
 
     elif name == "add_to_cart":
+        product_id = input_data.get("product_id")
+        if product_id is None:
+            return json.dumps({"error": "Missing product_id. To add by product name (e.g. 'add Samsung TV'), first call search_products with that name, then use the product id from the results to call add_to_cart(product_id=...). For 'add the first one', use the first ID from the conversation context (recent product IDs)."})
+        try:
+            product_id = int(product_id)
+        except (TypeError, ValueError):
+            return json.dumps({"error": "product_id must be a number."})
         quantity = input_data.get("quantity", 1)
-        cart_data = cart.add_item(session_id, input_data["product_id"], quantity, user_id=user_id)
-        logger.info("[tools] add_to_cart done")
-        return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
+        cart.add_item(session_id, product_id, quantity, user_id=user_id)
+        payload = await get_cart_payload(session_id, user_id=user_id)
+        logger.info("[tools] add_to_cart done product_id=%s", product_id)
+        return json.dumps({"success": True, "cart": payload})
 
     elif name == "get_cart":
         payload = await get_cart_payload(session_id, user_id=user_id)
@@ -234,15 +251,30 @@ async def execute_tool(
         return json.dumps(payload)
 
     elif name == "remove_from_cart":
-        cart_data = cart.remove_item(session_id, input_data["product_id"], user_id=user_id)
-        logger.info("[tools] remove_from_cart done")
-        return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
+        product_id = input_data.get("product_id")
+        if product_id is None:
+            return json.dumps({"error": "Missing product_id. When the user asks to remove a specific item by name (e.g. 'remove the laptop'), first call get_cart to see current cart items (each has product_id and title), then call remove_from_cart with the matching product_id."})
+        try:
+            product_id = int(product_id)
+        except (TypeError, ValueError):
+            return json.dumps({"error": "product_id must be a number."})
+        cart.remove_item(session_id, product_id, user_id=user_id)
+        payload = await get_cart_payload(session_id, user_id=user_id)
+        logger.info("[tools] remove_from_cart done product_id=%s", product_id)
+        return json.dumps({"success": True, "cart": payload})
 
     elif name == "update_cart_quantity":
-        cart_data = cart.update_quantity(
+        cart.update_quantity(
             session_id, input_data["product_id"], input_data["quantity"], user_id=user_id
         )
-        return json.dumps({"success": True, "cart": {str(k): v for k, v in cart_data.items()}})
+        payload = await get_cart_payload(session_id, user_id=user_id)
+        return json.dumps({"success": True, "cart": payload})
+
+    elif name == "clear_cart":
+        cart.clear_cart(session_id, user_id=user_id)
+        payload = await get_cart_payload(session_id, user_id=user_id)
+        logger.info("[tools] clear_cart done")
+        return json.dumps({"success": True, "cart": payload})
 
     logger.warning("[tools] unknown tool name=%s", name)
     return json.dumps({"error": f"Unknown tool: {name}"})

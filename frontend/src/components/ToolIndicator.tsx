@@ -10,6 +10,7 @@ const TOOL_META: Record<string, { emoji: string; label: string; color: string }>
   get_cart: { emoji: "🧾", label: "Checking your cart...", color: "text-gray-700 bg-white/80 border-gray-200/60" },
   remove_from_cart: { emoji: "🗑️", label: "Removing from cart...", color: "text-gray-700 bg-white/80 border-gray-200/60" },
   update_cart_quantity: { emoji: "✏️", label: "Updating quantity...", color: "text-gray-700 bg-white/80 border-gray-200/60" },
+  clear_cart: { emoji: "🗑️", label: "Clearing cart...", color: "text-gray-700 bg-white/80 border-gray-200/60" },
 };
 
 export function ToolIndicator({ name }: { name: string }) {

@@ -100,6 +100,7 @@ class SearchAgent(BaseAgent):
 
         # Execute tools if any
         user_id = state.get("user_id")
+        tool_results_for_graph = []
         if tool_calls:
             tool_results = []
             for idx, tool_call in enumerate(tool_calls):
@@ -113,6 +114,10 @@ class SearchAgent(BaseAgent):
                     "name": tool_name,
                     "content": result,
                 })
+                try:
+                    tool_results_for_graph.append({"name": tool_name, "data": json.loads(result)})
+                except (TypeError, json.JSONDecodeError):
+                    tool_results_for_graph.append({"name": tool_name, "data": {"raw": result}})
 
             # When search returned exactly one product, add get_product_details so the UI shows it
             search_tool_calls = [tc for tc in tool_calls if tc.get("name") == "search_products"]
@@ -133,6 +138,11 @@ class SearchAgent(BaseAgent):
                                 {"name": "get_product_details", "input": {"product_id": pid}, "id": f"single-product-{pid}"}
                             ]
                             logger.info("[search_agent] added get_product_details(product_id=%s) for single search result", pid)
+                            extra_result = await execute_tool("get_product_details", {"product_id": pid}, session_id, user_id=user_id)
+                            try:
+                                tool_results_for_graph.append({"name": "get_product_details", "data": json.loads(extra_result)})
+                            except (TypeError, json.JSONDecodeError):
+                                tool_results_for_graph.append({"name": "get_product_details", "data": {"raw": extra_result}})
             
             # Add tool results to messages
             messages.append(LLMMessage(role="assistant", content=assistant_content))
@@ -159,5 +169,6 @@ class SearchAgent(BaseAgent):
             "messages": messages,
             "response": response_text,
             "tool_calls": tool_calls,
+            "tool_results": tool_results_for_graph,
             "agent": self.name,
         }
